@@ -1,4 +1,4 @@
-# TTX Platform — Facilitator Guide
+# Cybertt — Facilitator Guide
 
 A browser-based tool for running cybersecurity incident response tabletop exercises.
 No installation required — open `index.html` in any modern browser.

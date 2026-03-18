@@ -1,11 +1,11 @@
-<!-- ABOUTME: Tabletop exercise (TTX) facilitator app for cybersecurity incident response training -->
+<!-- ABOUTME: Cybertt — facilitator app for cybersecurity incident response tabletop exercises -->
 <!-- ABOUTME: Single-file React + Tailwind CDN app, localStorage persistence, dark SOC war-room theme -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TTX — Incident Response Tabletop</title>
+  <title>Cybertt</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -99,8 +99,8 @@
     // ─── Storage ────────────────────────────────────────────────────────────────
 
     const STORAGE = {
-      scenarios: 'ttx_scenarios',
-      session:   'ttx_session',
+      scenarios: 'cybertt_scenarios',
+      session:   'cybertt_session',
     };
 
     function loadScenarios() {
@@ -362,7 +362,7 @@
               </button>
             )}
             <div>
-              <div className="text-xs font-mono text-cyan-600 uppercase tracking-widest">TTX PLATFORM</div>
+              <div className="text-xs font-mono text-cyan-600 uppercase tracking-widest">CYBERTT</div>
               <div className="font-semibold text-white text-sm leading-tight">{title}</div>
               {sub && <div className="text-xs text-slate-500">{sub}</div>}
             </div>
@@ -386,7 +386,7 @@
             const data = JSON.parse(evt.target.result);
             onImport(data);
           } catch {
-            alert('Invalid file. Expected a TTX scenario JSON file.');
+            alert('Invalid file. Expected a Cybertt scenario JSON file.');
           }
         };
         reader.readAsText(file);
@@ -1186,7 +1186,7 @@
       }
 
       function exportScenario(sc) {
-        downloadFile(JSON.stringify(sc, null, 2), `ttx-${slugify(sc.title)}.json`, 'application/json');
+        downloadFile(JSON.stringify(sc, null, 2), `cybertt-${slugify(sc.title)}.json`, 'application/json');
       }
 
       function importScenario(data) {
