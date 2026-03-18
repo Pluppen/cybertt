@@ -1,0 +1,1269 @@
+<!-- ABOUTME: Tabletop exercise (TTX) facilitator app for cybersecurity incident response training -->
+<!-- ABOUTME: Single-file React + Tailwind CDN app, localStorage persistence, dark SOC war-room theme -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TTX — Incident Response Tabletop</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+    body { font-family: 'Inter', sans-serif; }
+    .font-mono, code, .mono { font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+
+    @keyframes dice-spin {
+      0%   { transform: rotate(0deg)   scale(1);   }
+      25%  { transform: rotate(90deg)  scale(1.2); }
+      50%  { transform: rotate(180deg) scale(1.4); }
+      75%  { transform: rotate(270deg) scale(1.2); }
+      100% { transform: rotate(360deg) scale(1);   }
+    }
+    .dice-rolling { animation: dice-spin 0.6s cubic-bezier(0.36, 0.07, 0.19, 0.97); }
+
+    @keyframes inject-drop {
+      0%   { transform: translateY(-8px); opacity: 0; }
+      100% { transform: translateY(0);    opacity: 1; }
+    }
+    .inject-drop { animation: inject-drop 0.25s ease-out; }
+
+    @keyframes event-in {
+      0%   { transform: translateX(10px); opacity: 0; }
+      100% { transform: translateX(0);    opacity: 1; }
+    }
+    .event-in { animation: event-in 0.2s ease-out; }
+
+    ::-webkit-scrollbar       { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      height: 10px;
+      border-radius: 5px;
+      outline: none;
+      cursor: pointer;
+      background: transparent;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: white;
+      cursor: pointer;
+      border: 3px solid #1e293b;
+      box-shadow: 0 0 0 2px rgba(255,255,255,0.2);
+    }
+    input[type="range"]::-moz-range-thumb {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: white;
+      cursor: pointer;
+      border: 3px solid #1e293b;
+    }
+
+    .line-clamp-2 {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+  </style>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            'soc-bg':    '#070d19',
+            'soc-panel': '#0d1626',
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+    // ─── Storage ────────────────────────────────────────────────────────────────
+
+    const STORAGE = {
+      scenarios: 'ttx_scenarios',
+      session:   'ttx_session',
+    };
+
+    function loadScenarios() {
+      try { return JSON.parse(localStorage.getItem(STORAGE.scenarios)); } catch { return null; }
+    }
+    function saveScenarios(s) {
+      localStorage.setItem(STORAGE.scenarios, JSON.stringify(s));
+    }
+    function loadSession() {
+      try { return JSON.parse(localStorage.getItem(STORAGE.session)); } catch { return null; }
+    }
+    function saveSession(s) {
+      if (s === null) localStorage.removeItem(STORAGE.session);
+      else localStorage.setItem(STORAGE.session, JSON.stringify(s));
+    }
+
+    // ─── Pre-built scenarios ────────────────────────────────────────────────────
+
+    const DEFAULT_SCENARIOS = [
+      {
+        id: 'builtin-ransomware',
+        title: 'Ransomware Outbreak',
+        type: 'Ransomware',
+        scenarioStartTime: '08:47',
+        description: 'Finance department endpoints hit with ransomware. Encryption spreading across business units.',
+        situationBrief: `At 08:47 on a Monday morning, your SOC receives alerts from the EDR platform indicating unusual file encryption activity across 12 endpoints in the finance department. Three users have reported their files are inaccessible. A ransom note has been found on two machines.`,
+        roles: [
+          {
+            id: 'rr-ciso', name: 'CISO',
+            description: 'Chief Information Security Officer — owns the response strategy and executive communications.',
+            initialInfo: 'You received a call at home before arriving at the office. EDR alerts are firing. The CEO is already aware something is happening and expects an update within the hour.',
+          },
+          {
+            id: 'rr-soc', name: 'SOC Lead',
+            description: 'Head of the Security Operations Center — technical lead on detection and containment.',
+            initialInfo: 'Your analysts have been triaging for 20 minutes. The malware appears to be a known ransomware-as-a-service variant. Network segmentation may limit spread if acted on quickly.',
+          },
+          {
+            id: 'rr-itops', name: 'IT Ops',
+            description: 'Head of IT Operations — owns infrastructure, backups, and system recovery.',
+            initialInfo: 'You have started isolating affected endpoints. The backup system\'s last verified restore test was 6 weeks ago. You are not certain of current backup integrity.',
+          },
+          {
+            id: 'rr-legal', name: 'Legal Counsel',
+            description: 'In-house legal — owns regulatory obligations, breach notification, and external counsel engagement.',
+            initialInfo: 'Depending on what data is affected, GDPR and state-level notification obligations may be triggered. You have a 72-hour window to notify in many jurisdictions once a breach is confirmed.',
+          },
+          {
+            id: 'rr-comms', name: 'Communications Lead',
+            description: 'Heads internal and external communications strategy.',
+            initialInfo: 'No external inquiries yet. An internal all-staff communication has not been sent. The executive team is watching carefully.',
+          },
+        ],
+        injects: [
+          {
+            id: 'ri-1', order: 1,
+            title: 'Encryption Spreading — Backup Status Unknown',
+            description: 'A fourth business unit now reports encryption spreading. When IT Ops checks, they discover backups have not been tested in 6 weeks. The status of backup integrity is unknown.',
+            trigger: 'manual', timerMinutes: null,
+            discussionPrompt: 'Who owns backup testing accountability? What is your recovery posture right now if backups are unavailable? What are your options?',
+            diceEnabled: true,
+            diceOutcomes: [
+              { range: '1-2', outcome: 'Backups are corrupted. Recovery from backup is not possible at this time.' },
+              { range: '3-4', outcome: 'Partial backup available. Some data recovery is feasible, but significant gaps exist.' },
+              { range: '5-6', outcome: 'Full backup confirmed good. Recovery is feasible once systems are verified clean.' },
+            ],
+          },
+          {
+            id: 'ri-2', order: 2,
+            title: 'Press Inquiry — No External Comms Plan Active',
+            description: 'A journalist from a regional tech outlet calls the main switchboard asking about "a cyber attack at your company." A post is going up in 30 minutes regardless of whether you respond. No external communications plan has been activated.',
+            trigger: 'manual', timerMinutes: null,
+            discussionPrompt: 'Who is authorized to speak to the press? What can be said right now? Who must approve any statement? What happens if you say nothing?',
+            diceEnabled: false, diceOutcomes: [],
+          },
+          {
+            id: 'ri-3', order: 3,
+            title: 'Ransomware Group Posts on Leak Site',
+            description: 'The ransomware group has posted on their data leak site claiming to have exfiltrated 40GB of customer PII and financial records from your organization. They have published a sample of 200 records as proof.',
+            trigger: 'manual', timerMinutes: null,
+            discussionPrompt: 'Does this change your response priority? How does it affect your negotiation posture? What are the notification implications now that data exfiltration is confirmed?',
+            diceEnabled: false, diceOutcomes: [],
+          },
+          {
+            id: 'ri-4', order: 4,
+            title: 'Primary IR Vendor Unavailable',
+            description: 'The incident response vendor your team wanted to engage is currently handling a major concurrent incident and is unavailable for the next 4 hours.',
+            trigger: 'manual', timerMinutes: null,
+            discussionPrompt: 'Do you have a pre-approved secondary vendor? Who has authority to approve an emergency out-of-band contract? What do you do for the next 4 hours?',
+            diceEnabled: true,
+            diceOutcomes: [
+              { range: '1-3', outcome: 'No pre-vetted alternative on retainer. You will need emergency procurement or proceed without external IR support.' },
+              { range: '4-6', outcome: 'Secondary vendor is available and can spin up in 45 minutes — at 2× the contracted rate. Approval needed.' },
+            ],
+          },
+          {
+            id: 'ri-5', order: 5,
+            title: 'CEO Demands Board Briefing in 90 Minutes',
+            description: 'The CEO has called. The board is convening an emergency call in 90 minutes and expects a full briefing. Your impact assessment is still incomplete and two major unknowns remain unresolved.',
+            trigger: 'manual', timerMinutes: null,
+            discussionPrompt: 'What do you include in a board briefing with incomplete information? Who presents? What do you not yet know that you wish you did? What do you not say?',
+            diceEnabled: false, diceOutcomes: [],
+          },
+          {
+            id: 'ri-6', order: 6,
+            title: 'Regulator Makes Contact — Notification Window Open',
+            description: 'Your data protection regulator\'s duty officer has made contact. Legal confirms that depending on the data categories affected, a formal breach notification window has already started. The clock is ticking.',
+            trigger: 'manual', timerMinutes: null,
+            discussionPrompt: 'What are your specific notification obligations and timelines? What information do you need before you can notify? Who owns this process and who signs off?',
+            diceEnabled: false, diceOutcomes: [],
+          },
+        ],
+        createdAt: new Date(0).toISOString(),
+      },
+      {
+        id: 'builtin-phishing',
+        title: 'Phishing-Led Breach',
+        type: 'Phishing',
+        scenarioStartTime: '02:15',
+        scenarioStartTime: '02:15',
+        description: 'Senior developer account compromised via phishing. Source code repositories accessed for 72 hours.',
+        situationBrief: `Your SOC flags a suspicious login from a senior developer's account at 02:15 from an IP address in an unusual geography. The developer is on vacation. Initial investigation reveals a successful phishing email was opened 3 days ago. The account has read/write access to your source code repository.`,
+        roles: [
+          {
+            id: 'rp-soc', name: 'SOC Lead',
+            description: 'Head of the Security Operations Center — owns detection, investigation, and technical response.',
+            initialInfo: 'Your analyst flagged this during an overnight shift. The suspicious login originated from Eastern Europe. The account has been active continuously over the past 72 hours. You have not yet suspended it.',
+          },
+          {
+            id: 'rp-itops', name: 'IT Ops',
+            description: 'Head of IT Operations — owns account management, access controls, and system integrity.',
+            initialInfo: 'The compromised account has read/write access to 12 repositories, including your core product. The account has not been suspended pending investigation sign-off.',
+          },
+          {
+            id: 'rp-legal', name: 'Legal Counsel',
+            description: 'In-house legal — owns employee obligations, breach notification, and external counsel engagement.',
+            initialInfo: 'The developer is a full-time employee. There are significant legal sensitivities around how you communicate with them and what you disclose about the investigation.',
+          },
+          {
+            id: 'rp-comms', name: 'Communications Lead',
+            description: 'Owns customer, press, and internal communications strategy.',
+            initialInfo: 'No external inquiries yet. Depending on what was accessed, customer notification may be legally required. Internal comms to engineering staff will be sensitive.',
+          },
+        ],
+        injects: [
+          {
+            id: 'pi-1', order: 1,
+            title: 'Repository Access Confirmed — Scope Unknown',
+            description: 'Logs confirm the compromised account accessed and downloaded content from at least 3 repositories over the past 72 hours. The full scope of what was accessed is still being determined.',
+            trigger: 'manual', timerMinutes: null,
+            discussionPrompt: 'At what point do you suspend the account despite the active investigation risk? What are the trade-offs between continued monitoring and immediate containment?',
+            diceEnabled: true,
+            diceOutcomes: [
+              { range: '1-2', outcome: 'Downloads confirmed to include your most sensitive IP — core product source code and authentication infrastructure.' },
+              { range: '3-4', outcome: 'Downloads appear to be internal tooling repositories only. Sensitive, but no customer-facing product source code.' },
+              { range: '5-6', outcome: 'Only public or near-public repositories were accessed. Limited proprietary exposure, though access patterns are concerning.' },
+            ],
+          },
+          {
+            id: 'pi-2', order: 2,
+            title: 'Developer Unreachable',
+            description: 'Multiple attempts to reach the developer fail. Their manager confirms they are on a remote hiking trip with no cell service and will not be reachable for another 3 days.',
+            trigger: 'manual', timerMinutes: null,
+            discussionPrompt: 'Do you wait for their cooperation or act unilaterally? What actions can you take now without their input? What do you actually need from them that can\'t wait?',
+            diceEnabled: false, diceOutcomes: [],
+          },
+          {
+            id: 'pi-3', order: 3,
+            title: 'Second Compromised Account Identified',
+            description: 'A second compromised account is identified — this one belonging to a contractor. The contractor account has broader repository access than the developer\'s account, including production deployment pipelines.',
+            trigger: 'manual', timerMinutes: null,
+            discussionPrompt: 'How does this change your scope estimate? What does this reveal about your contractor access policies? Who needs to be notified about the contractor and under what terms?',
+            diceEnabled: false, diceOutcomes: [],
+          },
+          {
+            id: 'pi-4', order: 4,
+            title: 'Source Code Spotted on Dark Web Forum',
+            description: 'A security researcher has sent a direct message to your company\'s public social media account saying they\'ve seen what appears to be your proprietary source code for sale on a hacker forum, priced at $15,000.',
+            trigger: 'manual', timerMinutes: null,
+            discussionPrompt: 'How do you verify this without tipping off the seller? What do you tell the researcher, and what obligations do you have toward them? Does this change your notification calculus?',
+            diceEnabled: false, diceOutcomes: [],
+          },
+          {
+            id: 'pi-5', order: 5,
+            title: 'Developer Returns to Cell Service',
+            description: 'The developer has unexpectedly returned to cell service and calls the office. They confirm clicking a suspicious link 3 days ago but say "nothing seemed to happen." They are confused and upset about what they\'re being told.',
+            trigger: 'manual', timerMinutes: null,
+            discussionPrompt: 'How do you handle this conversation carefully? What are your legal obligations to the developer as a victim? How do you frame this without creating a hostile situation or a legal liability?',
+            diceEnabled: false, diceOutcomes: [],
+          },
+        ],
+        createdAt: new Date(1).toISOString(),
+      }
+    ];
+
+    // ─── Utilities ──────────────────────────────────────────────────────────────
+
+    function uid() { return Math.random().toString(36).slice(2, 10); }
+
+    function downloadFile(content, filename, type = 'text/plain') {
+      const url = URL.createObjectURL(new Blob([content], { type }));
+      const a = document.createElement('a');
+      a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function slugify(title) {
+      return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    }
+
+    function fmtElapsed(ms) {
+      const s = Math.floor(ms / 1000);
+      return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    }
+
+    const SCENARIO_RATIO = 12; // 5 real minutes = 1 scenario hour
+
+    function fmtScenarioTime(startTimeStr, elapsedMs) {
+      const [h, m] = (startTimeStr || '08:00').split(':').map(Number);
+      const startMin = h * 60 + m;
+      const scenarioMin = Math.floor((elapsedMs / 1000 / 60) * SCENARIO_RATIO);
+      const total = startMin + scenarioMin;
+      const dh = Math.floor(total / 60) % 24;
+      const dm = total % 60;
+      return `${String(dh).padStart(2, '0')}:${String(dm).padStart(2, '0')}`;
+    }
+
+    function tensionTheme(lvl) {
+      if (lvl <= 3) return { text: 'text-emerald-400', border: 'border-emerald-600', badge: 'bg-emerald-900/40 text-emerald-400 border-emerald-800', hex: '#10b981', label: 'NOMINAL' };
+      if (lvl <= 6) return { text: 'text-yellow-400',  border: 'border-yellow-600',  badge: 'bg-yellow-900/40 text-yellow-400 border-yellow-800',   hex: '#eab308', label: 'ELEVATED' };
+      return               { text: 'text-red-400',     border: 'border-red-600',     badge: 'bg-red-900/40 text-red-400 border-red-800',             hex: '#ef4444', label: 'CRITICAL' };
+    }
+
+    function rollD6() { return Math.floor(Math.random() * 6) + 1; }
+
+    function getDiceOutcome(outcomes, roll) {
+      for (const o of outcomes) {
+        const parts = o.range.split('-').map(Number);
+        const [lo, hi] = parts.length === 2 ? parts : [parts[0], parts[0]];
+        if (roll >= lo && roll <= hi) return o.outcome;
+      }
+      return 'No matching outcome defined for this roll.';
+    }
+
+    // ─── Shared UI atoms ────────────────────────────────────────────────────────
+
+    const inputCls   = 'w-full bg-slate-800 border border-slate-700 rounded px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-cyan-600 transition-colors';
+    const labelCls   = 'text-xs font-mono text-slate-400 uppercase tracking-wide mb-1 block';
+    const btnPrimary = 'bg-cyan-700 hover:bg-cyan-600 text-white font-mono text-sm px-4 py-2 rounded transition-colors';
+    const btnGhost   = 'border border-slate-700 hover:border-slate-500 text-slate-400 hover:text-white font-mono text-sm px-4 py-2 rounded transition-colors';
+
+    function TopBar({ title, sub, onBack, right }) {
+      return (
+        <div className="sticky top-0 z-20 border-b border-slate-800 bg-slate-950/95 backdrop-blur px-6 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            {onBack && (
+              <button onClick={onBack} className="text-xs font-mono text-slate-500 hover:text-white transition-colors">
+                ← BACK
+              </button>
+            )}
+            <div>
+              <div className="text-xs font-mono text-cyan-600 uppercase tracking-widest">TTX PLATFORM</div>
+              <div className="font-semibold text-white text-sm leading-tight">{title}</div>
+              {sub && <div className="text-xs text-slate-500">{sub}</div>}
+            </div>
+          </div>
+          {right && <div className="flex items-center gap-3">{right}</div>}
+        </div>
+      );
+    }
+
+    // ─── VIEW: Scenario Library ─────────────────────────────────────────────────
+
+    function LibraryView({ scenarios, onNew, onEdit, onStart, onImport, onExport }) {
+      const fileInputRef = useRef(null);
+
+      function handleFileChange(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = evt => {
+          try {
+            const data = JSON.parse(evt.target.result);
+            onImport(data);
+          } catch {
+            alert('Invalid file. Expected a TTX scenario JSON file.');
+          }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+      }
+
+      return (
+        <div className="min-h-screen bg-slate-950">
+          <input ref={fileInputRef} type="file" accept=".json" className="hidden" onChange={handleFileChange} />
+          <TopBar
+            title="Scenario Library"
+            right={
+              <>
+                <button onClick={() => fileInputRef.current.click()} className={btnGhost + ' py-1.5 text-xs'}>
+                  IMPORT JSON
+                </button>
+                <button onClick={onNew} className={btnPrimary}>+ NEW SCENARIO</button>
+              </>
+            }
+          />
+          <div className="max-w-4xl mx-auto px-6 py-8">
+            <div className="mb-6">
+              <h1 className="text-xl font-bold text-white">Incident Response Scenarios</h1>
+              <p className="text-sm text-slate-500 mt-0.5">
+                {scenarios.length} scenario{scenarios.length !== 1 ? 's' : ''} · select one to run a live exercise
+              </p>
+            </div>
+            <div className="space-y-3">
+              {scenarios.map(s => (
+                <ScenarioCard key={s.id} scenario={s} onEdit={() => onEdit(s)} onStart={() => onStart(s)} onExport={() => onExport(s)} />
+              ))}
+            </div>
+            {scenarios.length === 0 && (
+              <div className="text-center py-20 text-slate-600">
+                <div className="text-5xl mb-4">🛡</div>
+                <p className="font-mono text-sm">No scenarios found. Create one to begin.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function ScenarioCard({ scenario, onEdit, onStart, onExport }) {
+      const typeBadge = {
+        'Ransomware': 'bg-red-950 text-red-400 border border-red-900',
+        'Phishing':   'bg-orange-950 text-orange-400 border border-orange-900',
+        'DDoS':          'bg-blue-950 text-blue-400 border border-blue-900',
+        'Supply Chain':  'bg-emerald-950 text-emerald-400 border border-emerald-900',
+        'Dataintrång':   'bg-violet-950 text-violet-400 border border-violet-900',
+        'Insider Threat': 'bg-purple-950 text-purple-400 border border-purple-900',
+      };
+      const badge = typeBadge[scenario.type] || 'bg-slate-800 text-slate-400 border border-slate-700';
+
+      return (
+        <div className="bg-slate-900 border border-slate-800 hover:border-slate-600 rounded-lg p-5 transition-colors">
+          <div className="flex items-start justify-between gap-4">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center flex-wrap gap-2 mb-2">
+                <h2 className="text-base font-semibold text-white">{scenario.title}</h2>
+                <span className={`text-xs font-mono px-2 py-0.5 rounded ${badge}`}>{scenario.type}</span>
+                <span className="text-xs font-mono text-slate-600">{scenario.injects.length} INJECTS</span>
+                <span className="text-xs font-mono text-slate-600">{scenario.roles.length} ROLES</span>
+              </div>
+              <p className="text-sm text-slate-400 line-clamp-2">{scenario.description}</p>
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <button onClick={onExport} className={btnGhost + ' py-1.5 text-xs'}>EXPORT</button>
+              <button onClick={onEdit} className={btnGhost + ' py-1.5 text-xs'}>EDIT</button>
+              <button onClick={onStart} className="bg-cyan-800 hover:bg-cyan-700 text-white font-mono text-xs px-3 py-1.5 rounded transition-colors">
+                ▶ START
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ─── VIEW: Scenario Builder ─────────────────────────────────────────────────
+
+    function BuilderView({ scenario: init, onSave, onBack }) {
+      const isNew = !init;
+      const [s, setS] = useState(init || {
+        id: uid(), title: '', type: '', description: '',
+        situationBrief: '', scenarioStartTime: '08:00', roles: [], injects: [],
+        createdAt: new Date().toISOString(),
+      });
+
+      const set = (k, v) => setS(p => ({ ...p, [k]: v }));
+
+      const addRole = () => setS(p => ({
+        ...p, roles: [...p.roles, { id: uid(), name: '', description: '', initialInfo: '' }],
+      }));
+      const setRole = (id, k, v) => setS(p => ({
+        ...p, roles: p.roles.map(r => r.id === id ? { ...r, [k]: v } : r),
+      }));
+      const delRole = id => setS(p => ({ ...p, roles: p.roles.filter(r => r.id !== id) }));
+
+      const addInject = () => setS(p => ({
+        ...p, injects: [...p.injects, {
+          id: uid(), order: p.injects.length + 1, title: '', description: '',
+          trigger: 'manual', timerMinutes: null, discussionPrompt: '',
+          diceEnabled: false, diceOutcomes: [],
+        }],
+      }));
+      const setInject = (id, k, v) => setS(p => ({
+        ...p, injects: p.injects.map(i => i.id === id ? { ...i, [k]: v } : i),
+      }));
+      const moveInject = (id, dir) => setS(p => {
+        const arr = [...p.injects];
+        const idx = arr.findIndex(i => i.id === id);
+        const to = idx + dir;
+        if (to < 0 || to >= arr.length) return p;
+        [arr[idx], arr[to]] = [arr[to], arr[idx]];
+        return { ...p, injects: arr.map((i, n) => ({ ...i, order: n + 1 })) };
+      });
+      const delInject = id => setS(p => ({
+        ...p, injects: p.injects.filter(i => i.id !== id).map((i, n) => ({ ...i, order: n + 1 })),
+      }));
+
+      const addDiceRow = injectId => setInject(injectId, 'diceOutcomes', [
+        ...(s.injects.find(i => i.id === injectId)?.diceOutcomes || []),
+        { range: '', outcome: '' },
+      ]);
+      const setDiceRow = (injectId, idx, k, v) => setS(p => ({
+        ...p,
+        injects: p.injects.map(inj => {
+          if (inj.id !== injectId) return inj;
+          const diceOutcomes = inj.diceOutcomes.map((o, i) => i === idx ? { ...o, [k]: v } : o);
+          return { ...inj, diceOutcomes };
+        }),
+      }));
+      const delDiceRow = (injectId, idx) => setS(p => ({
+        ...p,
+        injects: p.injects.map(inj =>
+          inj.id !== injectId ? inj
+            : { ...inj, diceOutcomes: inj.diceOutcomes.filter((_, i) => i !== idx) }
+        ),
+      }));
+
+      return (
+        <div className="min-h-screen bg-slate-950">
+          <TopBar
+            title={isNew ? 'New Scenario' : `Edit: ${s.title || 'Untitled'}`}
+            onBack={onBack}
+          />
+          <div className="max-w-3xl mx-auto px-6 py-8 space-y-6 pb-16">
+
+            {/* ── Scenario details */}
+            <section className="bg-slate-900 border border-slate-800 rounded-lg p-6 space-y-4">
+              <h2 className="text-xs font-mono text-cyan-500 uppercase tracking-widest">Scenario Details</h2>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={labelCls}>Title</label>
+                  <input className={inputCls} value={s.title} onChange={e => set('title', e.target.value)} placeholder="e.g. Ransomware Outbreak" />
+                </div>
+                <div>
+                  <label className={labelCls}>Incident Type</label>
+                  <input className={inputCls} value={s.type} onChange={e => set('type', e.target.value)} placeholder="e.g. Ransomware, Phishing, DDoS" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className={labelCls}>Scenario Start Time</label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="time"
+                      className={inputCls + ' w-36'}
+                      value={s.scenarioStartTime || '08:00'}
+                      onChange={e => set('scenarioStartTime', e.target.value)}
+                    />
+                    <span className="text-xs font-mono text-slate-500">Clock position at T+0. Advances 12× real time (5 min = 1 hr).</span>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <label className={labelCls}>Short Description</label>
+                <input className={inputCls} value={s.description} onChange={e => set('description', e.target.value)} placeholder="One-line summary for the library card" />
+              </div>
+              <div>
+                <label className={labelCls}>Situation Brief</label>
+                <textarea
+                  className={`${inputCls} resize-none`} rows={5}
+                  value={s.situationBrief} onChange={e => set('situationBrief', e.target.value)}
+                  placeholder="Opening brief read to all participants at the start of the exercise..."
+                />
+              </div>
+            </section>
+
+            {/* ── Roles */}
+            <section className="bg-slate-900 border border-slate-800 rounded-lg p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xs font-mono text-cyan-500 uppercase tracking-widest">Participant Roles</h2>
+                <button onClick={addRole} className="text-xs font-mono text-cyan-400 hover:text-cyan-300 border border-cyan-900 hover:border-cyan-700 px-3 py-1 rounded transition-colors">
+                  + ADD ROLE
+                </button>
+              </div>
+              {s.roles.length === 0 && <p className="text-sm text-slate-600">No roles defined.</p>}
+              {s.roles.map(r => (
+                <div key={r.id} className="border border-slate-700 rounded-lg p-4 space-y-2">
+                  <div className="flex gap-2">
+                    <input className={`${inputCls} flex-1`} value={r.name} onChange={e => setRole(r.id, 'name', e.target.value)} placeholder="Role name (e.g. CISO)" />
+                    <button onClick={() => delRole(r.id)} className="text-slate-500 hover:text-red-400 px-2 transition-colors font-mono">✕</button>
+                  </div>
+                  <input className={inputCls} value={r.description} onChange={e => setRole(r.id, 'description', e.target.value)} placeholder="Role responsibilities and scope" />
+                  <textarea className={`${inputCls} resize-none`} rows={2} value={r.initialInfo} onChange={e => setRole(r.id, 'initialInfo', e.target.value)} placeholder="Private initial briefing given to this role at session start..." />
+                </div>
+              ))}
+            </section>
+
+            {/* ── Injects */}
+            <section className="bg-slate-900 border border-slate-800 rounded-lg p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xs font-mono text-cyan-500 uppercase tracking-widest">Injects ({s.injects.length})</h2>
+                <button onClick={addInject} className="text-xs font-mono text-cyan-400 hover:text-cyan-300 border border-cyan-900 hover:border-cyan-700 px-3 py-1 rounded transition-colors">
+                  + ADD INJECT
+                </button>
+              </div>
+              {s.injects.length === 0 && <p className="text-sm text-slate-600">No injects defined.</p>}
+              {s.injects.map((inj, idx) => (
+                <InjectEditorCard
+                  key={inj.id} inject={inj} index={idx} total={s.injects.length}
+                  onUpdate={(k, v) => setInject(inj.id, k, v)}
+                  onMove={dir => moveInject(inj.id, dir)}
+                  onRemove={() => delInject(inj.id)}
+                  onAddDiceRow={() => addDiceRow(inj.id)}
+                  onSetDiceRow={(i, k, v) => setDiceRow(inj.id, i, k, v)}
+                  onDelDiceRow={i => delDiceRow(inj.id, i)}
+                />
+              ))}
+            </section>
+
+            <div className="flex justify-end gap-3">
+              <button onClick={onBack} className={btnGhost}>CANCEL</button>
+              <button onClick={() => onSave(s)} className={btnPrimary}>SAVE SCENARIO</button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    function InjectEditorCard({ inject: inj, index, total, onUpdate, onMove, onRemove, onAddDiceRow, onSetDiceRow, onDelDiceRow }) {
+      return (
+        <div className="border border-slate-700 rounded-lg p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono text-slate-600 w-6">#{index + 1}</span>
+            <input className={`${inputCls} flex-1`} value={inj.title} onChange={e => onUpdate('title', e.target.value)} placeholder="Inject title" />
+            <div className="flex gap-1 ml-1">
+              <button disabled={index === 0}       onClick={() => onMove(-1)} className="text-slate-500 hover:text-white disabled:opacity-20 w-6 text-center text-xs">▲</button>
+              <button disabled={index === total-1} onClick={() => onMove(1)}  className="text-slate-500 hover:text-white disabled:opacity-20 w-6 text-center text-xs">▼</button>
+              <button onClick={onRemove} className="text-slate-500 hover:text-red-400 w-6 text-center text-xs font-mono transition-colors">✕</button>
+            </div>
+          </div>
+          <div>
+            <label className={labelCls}>Description (shown when inject fires)</label>
+            <textarea className={`${inputCls} resize-none`} rows={3} value={inj.description} onChange={e => onUpdate('description', e.target.value)} placeholder="The scenario development delivered to participants..." />
+          </div>
+          <div>
+            <label className={labelCls}>Discussion Prompt</label>
+            <input className={inputCls} value={inj.discussionPrompt} onChange={e => onUpdate('discussionPrompt', e.target.value)} placeholder="Guiding question to focus team discussion..." />
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer w-fit">
+            <input type="checkbox" checked={inj.diceEnabled} onChange={e => onUpdate('diceEnabled', e.target.checked)} className="w-4 h-4 accent-yellow-500" />
+            <span className="text-xs font-mono text-slate-400">ENABLE DICE TABLE</span>
+          </label>
+          {inj.diceEnabled && (
+            <div className="bg-slate-800/50 border border-slate-700 rounded p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-mono text-yellow-500">D6 OUTCOME TABLE</span>
+                <button onClick={onAddDiceRow} className="text-xs font-mono text-slate-400 hover:text-white transition-colors">+ ROW</button>
+              </div>
+              {inj.diceOutcomes.length === 0 && (
+                <p className="text-xs text-slate-600">No rows yet. Add a row per outcome range (e.g. 1-2, 3-4, 5-6).</p>
+              )}
+              {inj.diceOutcomes.map((o, i) => (
+                <div key={i} className="flex gap-2 items-center">
+                  <input
+                    className="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-white w-20 focus:outline-none focus:border-cyan-600"
+                    value={o.range} onChange={e => onSetDiceRow(i, 'range', e.target.value)} placeholder="1-2"
+                  />
+                  <input
+                    className="bg-slate-800 border border-slate-700 rounded px-2 py-1.5 text-xs text-white flex-1 focus:outline-none focus:border-cyan-600"
+                    value={o.outcome} onChange={e => onSetDiceRow(i, 'outcome', e.target.value)} placeholder="Outcome text..."
+                  />
+                  <button onClick={() => onDelDiceRow(i)} className="text-slate-500 hover:text-red-400 text-xs font-mono transition-colors">✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── VIEW: Live Session ─────────────────────────────────────────────────────
+
+    function SessionView({ scenario, initialSession, onEnd }) {
+      const [sess, setSess] = useState(() => initialSession || {
+        scenarioId: scenario.id,
+        startedAt: new Date().toISOString(),
+        currentInjectIndex: 0,
+        tensionLevel: 0,
+        events: [],
+      });
+
+      const [elapsed, setElapsed]           = useState(0);
+      const [dice, setDice]                 = useState({ rolling: false, result: null, outcome: null });
+      const [pendingTension, setPendingTension] = useState(sess.tensionLevel);
+      const [showDecision, setShowDecision] = useState(false);
+      const [decisionText, setDecisionText] = useState('');
+      const [showBrief, setShowBrief]       = useState(false);
+      const timerRef   = useRef(null);
+      const tensionRef = useRef(null); // debounce ref
+
+      useEffect(() => { saveSession(sess); }, [sess]);
+
+      useEffect(() => {
+        const start = new Date(sess.startedAt).getTime();
+        timerRef.current = setInterval(() => setElapsed(Date.now() - start), 1000);
+        return () => clearInterval(timerRef.current);
+      }, [sess.startedAt]);
+
+      function addEvent(type, payload) {
+        const timestamp = Date.now() - new Date(sess.startedAt).getTime();
+        setSess(p => ({ ...p, events: [...p.events, { timestamp, type, payload }] }));
+      }
+
+      function fireInject() {
+        const inj = scenario.injects[sess.currentInjectIndex];
+        if (!inj) return;
+        addEvent('inject_fired', { injectId: inj.id, title: inj.title });
+        setSess(p => ({ ...p, currentInjectIndex: p.currentInjectIndex + 1 }));
+        setDice({ rolling: false, result: null, outcome: null });
+      }
+
+      function skipInject() {
+        setSess(p => ({ ...p, currentInjectIndex: p.currentInjectIndex + 1 }));
+        setDice({ rolling: false, result: null, outcome: null });
+      }
+
+      function handleTensionChange(val) {
+        const lvl = Number(val);
+        setPendingTension(lvl);
+        setSess(p => ({ ...p, tensionLevel: lvl }));
+        clearTimeout(tensionRef.current);
+        tensionRef.current = setTimeout(() => {
+          addEvent('tension_changed', { level: lvl });
+        }, 800);
+      }
+
+      function handleRoll() {
+        setDice({ rolling: true, result: null, outcome: null });
+        setTimeout(() => {
+          const r = rollD6();
+          const inj = scenario.injects[sess.currentInjectIndex];
+          const out = getDiceOutcome(inj?.diceOutcomes || [], r);
+          setDice({ rolling: false, result: r, outcome: out });
+          addEvent('dice_roll', { roll: r, outcome: out, injectTitle: inj?.title });
+        }, 650);
+      }
+
+      function submitDecision() {
+        if (!decisionText.trim()) return;
+        addEvent('decision_logged', { text: decisionText.trim() });
+        setDecisionText('');
+        setShowDecision(false);
+      }
+
+      function handleEnd() {
+        clearTimeout(tensionRef.current);
+        const done = { ...sess, endedAt: new Date().toISOString() };
+        saveSession(null);
+        onEnd(done);
+      }
+
+      const currentInject = scenario.injects[sess.currentInjectIndex];
+      const upcoming      = scenario.injects.slice(sess.currentInjectIndex + 1);
+      const tc            = tensionTheme(sess.tensionLevel);
+      const pct           = (sess.tensionLevel / 10) * 100;
+      const allDone       = sess.currentInjectIndex >= scenario.injects.length;
+
+      return (
+        <div className="h-screen bg-slate-950 flex flex-col overflow-hidden">
+
+          {/* ── Session top bar */}
+          <div className="shrink-0 bg-slate-900 border-b border-slate-800 px-5 py-2.5 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div>
+                <div className="text-xs font-mono text-cyan-600 uppercase tracking-widest">LIVE EXERCISE</div>
+                <div className="font-semibold text-white text-sm">{scenario.title}</div>
+              </div>
+              {/* Real elapsed */}
+              <div className="flex flex-col items-center bg-slate-800 border border-slate-700 rounded px-3 py-1">
+                <span className="font-mono text-lg font-bold text-slate-300 tabular-nums leading-tight">{fmtElapsed(elapsed)}</span>
+                <span className="text-xs font-mono text-slate-600 uppercase tracking-wider">real</span>
+              </div>
+              {/* Scenario clock */}
+              <div className="flex flex-col items-center bg-slate-900 border border-cyan-800 rounded px-4 py-1">
+                <span className="font-mono text-2xl font-bold text-cyan-300 tabular-nums leading-tight">
+                  {fmtScenarioTime(scenario.scenarioStartTime, elapsed)}
+                </span>
+                <span className="text-xs font-mono text-cyan-700 uppercase tracking-wider">scenario</span>
+              </div>
+              {/* Ratio badge */}
+              <div className="text-xs font-mono text-slate-600 border border-slate-800 rounded px-2 py-1 leading-snug text-center">
+                <span className="text-slate-500">5 min</span><br/>
+                <span className="text-slate-700">=</span><br/>
+                <span className="text-slate-500">1 hr</span>
+              </div>
+              <button onClick={() => setShowBrief(true)} className="text-xs font-mono text-slate-500 hover:text-slate-300 border border-slate-800 hover:border-slate-600 px-2.5 py-1 rounded transition-colors">
+                SITUATION BRIEF
+              </button>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className={`text-xs font-mono border px-2.5 py-1 rounded ${tc.badge}`}>
+                {tc.label} · {sess.tensionLevel}/10
+              </span>
+              <button onClick={() => setShowDecision(true)} className="text-xs font-mono border border-slate-700 hover:border-slate-500 text-slate-300 hover:text-white px-3 py-1.5 rounded transition-colors">
+                📝 LOG DECISION
+              </button>
+              <button onClick={handleEnd} className="text-xs font-mono bg-red-950 hover:bg-red-900 text-red-400 border border-red-900 px-3 py-1.5 rounded transition-colors">
+                ■ END SESSION
+              </button>
+            </div>
+          </div>
+
+          {/* ── Two-column body */}
+          <div className="flex-1 flex overflow-hidden">
+
+            {/* Left: facilitator controls */}
+            <div className="w-[48%] border-r border-slate-800 overflow-y-auto p-4 space-y-3">
+
+              {/* Tension meter */}
+              <div className="bg-slate-900 border border-slate-800 rounded-lg p-4 space-y-2">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-mono text-slate-400 uppercase tracking-wide">Tension Meter</span>
+                  <span className={`text-xl font-mono font-bold tabular-nums ${tc.text}`}>{sess.tensionLevel}</span>
+                </div>
+                <div className="relative h-3">
+                  <div className="absolute inset-0 rounded-full overflow-hidden" style={{ background: 'linear-gradient(to right, #10b981, #eab308, #ef4444)' }}>
+                    <div className="absolute inset-y-0 right-0 bg-slate-900 transition-all duration-100" style={{ width: `${100 - pct}%` }} />
+                  </div>
+                  <input
+                    type="range" min={0} max={10} step={1}
+                    value={sess.tensionLevel}
+                    onChange={e => handleTensionChange(e.target.value)}
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                  />
+                </div>
+                <div className="flex justify-between text-xs font-mono text-slate-700">
+                  <span>CALM</span><span>CRITICAL</span>
+                </div>
+              </div>
+
+              {/* Current inject card */}
+              {currentInject ? (
+                <div key={currentInject.id} className="inject-drop bg-slate-900 border-2 border-cyan-800 rounded-lg p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-mono text-cyan-500 bg-cyan-950 px-2 py-0.5 rounded">
+                      INJECT {sess.currentInjectIndex + 1} / {scenario.injects.length}
+                    </span>
+                    {currentInject.diceEnabled && (
+                      <span className="text-xs font-mono text-yellow-600 bg-yellow-950 px-2 py-0.5 rounded">🎲 DICE</span>
+                    )}
+                  </div>
+                  <h2 className="font-bold text-white leading-tight">{currentInject.title}</h2>
+                  <p className="text-sm text-slate-300 leading-relaxed">{currentInject.description}</p>
+                  {currentInject.discussionPrompt && (
+                    <div className="bg-slate-800 border-l-4 border-yellow-700 rounded-r-lg p-3">
+                      <div className="text-xs font-mono text-yellow-600 mb-1 uppercase tracking-wide">Discussion Prompt</div>
+                      <p className="text-sm text-yellow-100 leading-relaxed">{currentInject.discussionPrompt}</p>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="bg-slate-900 border border-slate-700 rounded-lg p-6 text-center space-y-1">
+                  <div className="text-3xl">✓</div>
+                  <div className="text-sm font-mono text-slate-400 uppercase tracking-wide">All Injects Complete</div>
+                  <p className="text-xs text-slate-600">End the session to review the debrief.</p>
+                </div>
+              )}
+
+              {/* Dice roller */}
+              {currentInject?.diceEnabled && (
+                <div className="bg-slate-900 border border-yellow-900/50 rounded-lg p-4 space-y-3">
+                  <div className="text-xs font-mono text-yellow-600 uppercase tracking-wide">🎲 D6 Dice Roll</div>
+                  <div className="flex items-center gap-4">
+                    <div className={`w-14 h-14 bg-slate-800 border-2 border-yellow-800 rounded-lg flex items-center justify-center text-2xl font-mono font-bold text-yellow-300 select-none ${dice.rolling ? 'dice-rolling' : ''}`}>
+                      {dice.rolling ? '?' : dice.result ?? '—'}
+                    </div>
+                    <div className="flex-1">
+                      {dice.outcome
+                        ? <p className="text-sm text-slate-200 leading-snug">{dice.outcome}</p>
+                        : <p className="text-sm text-slate-600 italic">Roll to determine the outcome of this inject.</p>
+                      }
+                    </div>
+                  </div>
+                  <button onClick={handleRoll} disabled={dice.rolling} className="w-full bg-yellow-800 hover:bg-yellow-700 disabled:opacity-40 text-yellow-100 font-mono text-sm py-2 rounded transition-colors">
+                    {dice.rolling ? 'ROLLING...' : 'ROLL D6'}
+                  </button>
+                </div>
+              )}
+
+              {/* Fire / Skip */}
+              {currentInject && (
+                <div className="flex gap-2">
+                  <button onClick={fireInject} className="flex-1 bg-cyan-800 hover:bg-cyan-700 text-white font-mono text-sm py-2.5 rounded transition-colors">
+                    🔴 FIRE INJECT
+                  </button>
+                  <button onClick={skipInject} className="border border-slate-700 hover:border-slate-500 text-slate-400 hover:text-white font-mono text-sm px-5 py-2.5 rounded transition-colors">
+                    SKIP
+                  </button>
+                </div>
+              )}
+
+              {/* Upcoming injects */}
+              {upcoming.length > 0 && (
+                <div>
+                  <div className="text-xs font-mono text-slate-600 uppercase tracking-wide mb-2">UP NEXT</div>
+                  <div className="space-y-1.5">
+                    {upcoming.slice(0, 4).map((inj, i) => (
+                      <div key={inj.id} className="bg-slate-900/60 border border-slate-800 rounded px-3 py-2 flex items-center gap-2">
+                        <span className="text-xs font-mono text-slate-700 w-5">{sess.currentInjectIndex + 2 + i}</span>
+                        <span className="text-xs text-slate-500 flex-1 truncate">{inj.title}</span>
+                        {inj.diceEnabled && <span className="text-xs text-yellow-800">🎲</span>}
+                      </div>
+                    ))}
+                    {upcoming.length > 4 && (
+                      <div className="text-xs font-mono text-slate-700 pl-3">+{upcoming.length - 4} more</div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Right: event feed */}
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="text-xs font-mono text-slate-600 uppercase tracking-wide mb-3">
+                EVENT LOG — {sess.events.length} event{sess.events.length !== 1 ? 's' : ''}
+              </div>
+              {sess.events.length === 0 && (
+                <div className="text-sm font-mono text-slate-700 mt-10 text-center">Awaiting first event…</div>
+              )}
+              <div className="space-y-1.5">
+                {[...sess.events].reverse().map((ev, i) => (
+                  <EventEntry key={i} event={ev} fresh={i === 0} startTime={scenario.scenarioStartTime} />
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* ── Decision modal */}
+          {showDecision && (
+            <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50 p-4">
+              <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 w-full max-w-lg space-y-4 shadow-2xl">
+                <h3 className="text-xs font-mono text-cyan-500 uppercase tracking-widest">Log Team Decision</h3>
+                <textarea
+                  autoFocus rows={4}
+                  className={`${inputCls} resize-none`}
+                  value={decisionText}
+                  onChange={e => setDecisionText(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) submitDecision(); }}
+                  placeholder="What did the team decide? (e.g. 'Isolated finance VLAN and notified CISO at 09:12. Decided not to pay ransom pending legal review.')"
+                />
+                <div className="flex gap-3 justify-end">
+                  <button onClick={() => { setShowDecision(false); setDecisionText(''); }} className={btnGhost}>CANCEL</button>
+                  <button onClick={submitDecision} className={btnPrimary}>LOG DECISION</button>
+                </div>
+                <p className="text-xs font-mono text-slate-700">⌘/Ctrl+Enter to submit</p>
+              </div>
+            </div>
+          )}
+
+          {/* ── Situation brief modal */}
+          {showBrief && (
+            <div className="fixed inset-0 bg-black/75 flex items-center justify-center z-50 p-4">
+              <div className="bg-slate-900 border border-slate-700 rounded-xl p-6 w-full max-w-2xl space-y-4 shadow-2xl">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-mono text-cyan-500 uppercase tracking-widest">Situation Brief</h3>
+                  <button onClick={() => setShowBrief(false)} className="text-slate-500 hover:text-white font-mono text-sm">✕</button>
+                </div>
+                <h2 className="font-bold text-white text-lg">{scenario.title}</h2>
+                <p className="text-sm text-slate-300 leading-relaxed whitespace-pre-line">{scenario.situationBrief}</p>
+                {scenario.roles.length > 0 && (
+                  <div>
+                    <div className="text-xs font-mono text-slate-500 uppercase tracking-wide mb-2">Roles</div>
+                    <div className="space-y-1">
+                      {scenario.roles.map(r => (
+                        <div key={r.id} className="flex gap-2 text-sm">
+                          <span className="text-white font-medium w-36 shrink-0">{r.name}</span>
+                          <span className="text-slate-400">{r.description}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <button onClick={() => setShowBrief(false)} className={`${btnPrimary} w-full`}>CLOSE</button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ─── Event entry (used in session + debrief) ────────────────────────────────
+
+    function EventEntry({ event, fresh, startTime }) {
+      const cfg = {
+        inject_fired:    { icon: '🔴', label: 'INJECT FIRED', border: 'border-l-red-600',    text: 'text-red-400'    },
+        dice_roll:       { icon: '🎲', label: 'DICE ROLL',    border: 'border-l-yellow-600', text: 'text-yellow-400' },
+        decision_logged: { icon: '📝', label: 'DECISION',     border: 'border-l-blue-500',   text: 'text-blue-400'   },
+        tension_changed: { icon: '⚡', label: 'TENSION',      border: 'border-l-purple-600', text: 'text-purple-400' },
+      };
+      const c = cfg[event.type] || { icon: '•', label: event.type, border: 'border-l-slate-600', text: 'text-slate-400' };
+
+      function detail() {
+        switch (event.type) {
+          case 'inject_fired':    return event.payload.title;
+          case 'dice_roll':       return `Rolled ${event.payload.roll} — ${event.payload.outcome}`;
+          case 'decision_logged': return event.payload.text;
+          case 'tension_changed': return `Set to ${event.payload.level}/10`;
+          default: return JSON.stringify(event.payload);
+        }
+      }
+
+      return (
+        <div className={`bg-slate-900 border-l-4 ${c.border} border border-l-0 border-slate-800 rounded-r-lg p-3 ${fresh ? 'event-in' : ''}`}>
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className="text-xs">{c.icon}</span>
+            <span className={`text-xs font-mono ${c.text}`}>{c.label}</span>
+            <span className="text-xs font-mono text-slate-600 ml-auto tabular-nums">
+              {startTime ? fmtScenarioTime(startTime, event.timestamp) : fmtElapsed(event.timestamp)}
+            </span>
+          </div>
+          <p className="text-xs font-mono text-slate-300 leading-relaxed">{detail()}</p>
+        </div>
+      );
+    }
+
+    // ─── VIEW: Debrief ──────────────────────────────────────────────────────────
+
+    function DebriefView({ scenario, log, onNewSession, onBackToLibrary }) {
+      const duration = log.endedAt
+        ? (new Date(log.endedAt) - new Date(log.startedAt))
+        : log.events.length > 0 ? log.events.at(-1).timestamp : 0;
+
+      const stats = {
+        duration:   fmtElapsed(duration),
+        injections: log.events.filter(e => e.type === 'inject_fired').length,
+        decisions:  log.events.filter(e => e.type === 'decision_logged').length,
+        rolls:      log.events.filter(e => e.type === 'dice_roll').length,
+      };
+
+      const decisions = log.events.filter(e => e.type === 'decision_logged');
+
+      function exportText() {
+        const lines = [
+          'TABLETOP EXERCISE DEBRIEF',
+          '─'.repeat(50),
+          `Scenario : ${scenario.title} (${scenario.type})`,
+          `Date     : ${new Date(log.startedAt).toLocaleString()}`,
+          `Duration : ${stats.duration}`,
+          '',
+          'SUMMARY',
+          `  Injects fired    : ${stats.injections}`,
+          `  Decisions logged : ${stats.decisions}`,
+          `  Dice rolls       : ${stats.rolls}`,
+          '',
+          'EVENT TIMELINE',
+          ...log.events.map(e => {
+            const t = fmtScenarioTime(scenario.scenarioStartTime, e.timestamp);
+            const r = fmtElapsed(e.timestamp);
+            switch (e.type) {
+              case 'inject_fired':    return `  [${t}] INJECT   : ${e.payload.title}`;
+              case 'dice_roll':       return `  [${t}] DICE     : Rolled ${e.payload.roll} — ${e.payload.outcome}`;
+              case 'decision_logged': return `  [${t}] DECISION : ${e.payload.text}`;
+              case 'tension_changed': return `  [${t}] TENSION  : ${e.payload.level}/10`;
+              default: return `  [${t}] ${e.type}`;
+            }
+          }),
+          '',
+          'DECISION LOG',
+          ...decisions.map((e, i) => `  ${i+1}. [${fmtScenarioTime(scenario.scenarioStartTime, e.timestamp)}] ${e.payload.text}`),
+          decisions.length === 0 ? '  (none recorded)' : '',
+        ];
+        const date = new Date(log.startedAt).toISOString().slice(0, 10);
+        downloadFile(lines.join('\n'), `debrief-${slugify(scenario.title)}-${date}.txt`);
+      }
+
+      return (
+        <div className="min-h-screen bg-slate-950">
+          <TopBar
+            title="Exercise Debrief"
+            sub={scenario.title}
+            right={
+              <>
+                <button onClick={exportText} className={btnGhost + ' py-1.5 text-xs'}>EXPORT TEXT</button>
+                <button onClick={onNewSession} className="bg-cyan-800 hover:bg-cyan-700 text-white font-mono text-xs px-3 py-1.5 rounded transition-colors">NEW SESSION</button>
+                <button onClick={onBackToLibrary} className={btnGhost + ' py-1.5 text-xs'}>LIBRARY</button>
+              </>
+            }
+          />
+          <div className="max-w-4xl mx-auto px-6 py-8 space-y-6 pb-16">
+
+            {/* Stats */}
+            <div className="grid grid-cols-4 gap-3">
+              {[
+                { label: 'Duration',   value: stats.duration,   color: 'text-cyan-400'   },
+                { label: 'Injects',    value: stats.injections, color: 'text-red-400'    },
+                { label: 'Decisions',  value: stats.decisions,  color: 'text-blue-400'   },
+                { label: 'Dice Rolls', value: stats.rolls,      color: 'text-yellow-400' },
+              ].map(s => (
+                <div key={s.label} className="bg-slate-900 border border-slate-800 rounded-lg p-4 text-center">
+                  <div className={`text-2xl font-mono font-bold tabular-nums ${s.color}`}>{s.value}</div>
+                  <div className="text-xs font-mono text-slate-600 mt-1 uppercase tracking-wide">{s.label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Timeline */}
+            <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
+              <h2 className="text-xs font-mono text-cyan-500 uppercase tracking-widest mb-4">Full Timeline</h2>
+              {log.events.length === 0
+                ? <p className="text-sm text-slate-600">No events recorded.</p>
+                : (
+                  <div className="space-y-1.5">
+                    {log.events.map((ev, i) => <EventEntry key={i} event={ev} startTime={scenario.scenarioStartTime} />)}
+                  </div>
+                )}
+            </div>
+
+            {/* Decision log */}
+            <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
+              <h2 className="text-xs font-mono text-cyan-500 uppercase tracking-widest mb-4">Decision Log</h2>
+              {decisions.length === 0
+                ? <p className="text-sm text-slate-600">No decisions were recorded during this session.</p>
+                : (
+                  <div className="space-y-3">
+                    {decisions.map((e, i) => (
+                      <div key={i} className="flex gap-3 items-start">
+                        <span className="text-xs font-mono text-slate-600 mt-0.5 w-14 shrink-0 tabular-nums">{fmtScenarioTime(scenario.scenarioStartTime, e.timestamp)}</span>
+                        <p className="text-sm text-slate-200 leading-relaxed">{e.payload.text}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+            </div>
+
+          </div>
+        </div>
+      );
+    }
+
+    // ─── App root ────────────────────────────────────────────────────────────────
+
+    function App() {
+      const [view, setView]           = useState('library');
+      const [scenarios, setScenarios] = useState(() => loadScenarios() || DEFAULT_SCENARIOS);
+      const [editing, setEditing]     = useState(null);   // scenario being edited
+      const [session, setSession]     = useState(null);   // { scenario, initialData }
+      const [debrief, setDebrief]     = useState(null);   // { scenario, log }
+
+      // Restore in-progress session from localStorage on first load
+      useEffect(() => {
+        const saved = loadSession();
+        if (!saved) return;
+        const sc = (loadScenarios() || DEFAULT_SCENARIOS).find(s => s.id === saved.scenarioId);
+        if (sc) {
+          setSession({ scenario: sc, initialData: saved });
+          setView('session');
+        } else {
+          saveSession(null);
+        }
+      }, []);
+
+      function saveScenario(sc) {
+        setScenarios(prev => {
+          const updated = prev.find(s => s.id === sc.id)
+            ? prev.map(s => s.id === sc.id ? sc : s)
+            : [...prev, sc];
+          saveScenarios(updated);
+          return updated;
+        });
+        setEditing(null);
+        setView('library');
+      }
+
+      function startSession(sc) {
+        saveSession(null);
+        setSession({ scenario: sc, initialData: null });
+        setView('session');
+      }
+
+      function endSession(log) {
+        setDebrief({ scenario: session.scenario, log });
+        setSession(null);
+        setView('debrief');
+      }
+
+      function exportScenario(sc) {
+        downloadFile(JSON.stringify(sc, null, 2), `ttx-${slugify(sc.title)}.json`, 'application/json');
+      }
+
+      function importScenario(data) {
+        if (!data || !data.title || !Array.isArray(data.injects)) {
+          alert('Invalid scenario file. Required fields: title, injects.');
+          return;
+        }
+        const sc = {
+          ...data,
+          id: scenarios.find(s => s.id === data.id) ? uid() : (data.id || uid()),
+          createdAt: data.createdAt || new Date().toISOString(),
+          roles:   Array.isArray(data.roles)   ? data.roles   : [],
+          injects: data.injects.map((inj, i) => ({
+            id: inj.id || uid(), order: inj.order ?? i + 1,
+            title: inj.title || '', description: inj.description || '',
+            trigger: inj.trigger || 'manual', timerMinutes: inj.timerMinutes ?? null,
+            discussionPrompt: inj.discussionPrompt || '',
+            diceEnabled: !!inj.diceEnabled,
+            diceOutcomes: Array.isArray(inj.diceOutcomes) ? inj.diceOutcomes : [],
+          })),
+        };
+        setScenarios(prev => {
+          const updated = [...prev, sc];
+          saveScenarios(updated);
+          return updated;
+        });
+      }
+
+      if (view === 'library') {
+        return (
+          <LibraryView
+            scenarios={scenarios}
+            onNew={() => { setEditing(null); setView('builder'); }}
+            onEdit={sc => { setEditing(sc); setView('builder'); }}
+            onStart={startSession}
+            onExport={exportScenario}
+            onImport={importScenario}
+          />
+        );
+      }
+
+      if (view === 'builder') {
+        return (
+          <BuilderView
+            scenario={editing}
+            onSave={saveScenario}
+            onBack={() => { setEditing(null); setView('library'); }}
+          />
+        );
+      }
+
+      if (view === 'session' && session) {
+        return (
+          <SessionView
+            scenario={session.scenario}
+            initialSession={session.initialData}
+            onEnd={endSession}
+          />
+        );
+      }
+
+      if (view === 'debrief' && debrief) {
+        return (
+          <DebriefView
+            scenario={debrief.scenario}
+            log={debrief.log}
+            onNewSession={() => startSession(debrief.scenario)}
+            onBackToLibrary={() => { setDebrief(null); setView('library'); }}
+          />
+        );
+      }
+
+      // Fallback — shouldn't be reachable
+      return <LibraryView scenarios={scenarios} onNew={() => setView('builder')} onEdit={() => {}} onStart={startSession} />;
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
